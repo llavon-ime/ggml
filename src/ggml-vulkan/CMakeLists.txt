@@ -87,6 +87,7 @@ if (Vulkan_FOUND)
     )
 
     target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)
+    target_compile_features(ggml-vulkan PRIVATE cxx_std_23)
     if(ANDROID)
         set(GGML_PKGCONFIG_LIBS_PRIVATE "${GGML_PKGCONFIG_LIBS_PRIVATE} -lvulkan" PARENT_SCOPE)
     else()

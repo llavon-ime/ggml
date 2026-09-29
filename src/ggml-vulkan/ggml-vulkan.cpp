@@ -80,6 +80,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include "ggml-backend-impl.h"
 
 #include "ggml-vulkan-shaders.hpp"
+#include "ggml-vulkan-pipeline-cache.hpp"
 
 // remove this once it's more widely available in the SDK
 #if !defined(VK_KHR_shader_bfloat16)
@@ -610,6 +611,7 @@ struct vk_device_struct {
     bool pipeline_robustness;
     bool memory_priority;
     vk::Device device;
+    ggml::vulkan::PipelineCache pipeline_cache;
     uint32_t vendor_id;
     vk::DriverId driver_id;
     vk_device_architecture architecture;
@@ -903,6 +905,7 @@ struct vk_device_struct {
 
         device.destroyDescriptorSetLayout(dsl);
 
+        pipeline_cache.close();
         device.destroy();
     }
 };
@@ -2281,7 +2284,7 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 #endif
 
     try {
-        pipeline->pipeline = device->device.createComputePipeline(VK_NULL_HANDLE, compute_pipeline_create_info).value;
+        pipeline->pipeline = device->pipeline_cache.create(compute_pipeline_create_info);
     } catch (const vk::SystemError& e) {
         std::cerr << "ggml_vulkan: Compute pipeline creation failed for " << pipeline->name << std::endl;
         std::cerr << "ggml_vulkan: " << e.what() << std::endl;
@@ -5581,6 +5584,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
             .setPEnabledExtensionNames(device_extensions);
         device_create_info.setPNext(&device_features2);
         device->device = device->physical_device.createDevice(device_create_info);
+        device->pipeline_cache.initialize(device->device, device->properties);
 
         // Queues
         ggml_vk_create_queue(device, device->compute_queue, compute_queue_family_index, 0, { vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer }, false);
@@ -16232,11 +16236,31 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
     return devices[device];
 }
 
+static bool ggml_backend_vk_set_pipeline_cache_directory(ggml_backend_dev_t dev, const char * directory) {
+    auto * ctx = static_cast<ggml_backend_vk_device_context *>(dev->context);
+    return ggml_vk_get_device(ctx->device)->pipeline_cache.configure(directory ? directory : "");
+}
+
+static void ggml_backend_vk_save_pipeline_cache(ggml_backend_dev_t dev) {
+    auto * ctx = static_cast<ggml_backend_vk_device_context *>(dev->context);
+    ggml_vk_get_device(ctx->device)->pipeline_cache.save();
+}
+
+static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t, const char * name) {
+    if (strcmp(name, "ggml_backend_vk_set_pipeline_cache_directory") == 0) {
+        return reinterpret_cast<void *>(ggml_backend_vk_set_pipeline_cache_directory);
+    }
+    if (strcmp(name, "ggml_backend_vk_save_pipeline_cache") == 0) {
+        return reinterpret_cast<void *>(ggml_backend_vk_save_pipeline_cache);
+    }
+    return nullptr;
+}
+
 static const struct ggml_backend_reg_i ggml_backend_vk_reg_i = {
     /* .get_name         = */ ggml_backend_vk_reg_get_name,
     /* .get_device_count = */ ggml_backend_vk_reg_get_device_count,
     /* .get_device       = */ ggml_backend_vk_reg_get_device,
-    /* .get_proc_address = */ NULL,
+    /* .get_proc_address = */ ggml_backend_vk_reg_get_proc_address,
 };
 
 ggml_backend_reg_t ggml_backend_vk_reg() {
