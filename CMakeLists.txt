@@ -352,7 +352,7 @@ if (GGML_STANDALONE)
         @ONLY)
 
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml.pc
-        DESTINATION share/pkgconfig)
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 endif()
 
 #
@@ -373,6 +373,7 @@ set(variable_set_statements
 set(GGML_SHARED_LIB ${BUILD_SHARED_LIBS})
 
 get_cmake_property(all_variables VARIABLES)
+list(FILTER all_variables EXCLUDE REGEX "^GGML_PKGCONFIG")
 foreach(variable_name IN LISTS all_variables)
     if(variable_name MATCHES "^GGML_")
         string(REPLACE ";" "\\;"

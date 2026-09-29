@@ -93,6 +93,7 @@ if (BLAS_FOUND)
     endif()
 
     target_link_libraries     (ggml-blas PRIVATE ${BLAS_LIBRARIES})
+    set(GGML_PKGCONFIG_REQUIRES_PRIVATE "${GGML_PKGCONFIG_REQUIRES_PRIVATE} cblas" PARENT_SCOPE)
     target_include_directories(ggml-blas SYSTEM PRIVATE ${BLAS_INCLUDE_DIRS})
 else()
     message(FATAL_ERROR "BLAS not found, please refer to "

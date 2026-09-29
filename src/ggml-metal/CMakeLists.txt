@@ -19,6 +19,11 @@ target_link_libraries(ggml-metal PRIVATE
                       ${METALKIT_FRAMEWORK}
                       )
 
+set(GGML_PKGCONFIG_LIBS_PRIVATE
+    "${GGML_PKGCONFIG_LIBS_PRIVATE} -framework Foundation -framework Metal -framework MetalKit"
+    PARENT_SCOPE
+)
+
 if (GGML_METAL_NDEBUG)
     add_compile_definitions(GGML_METAL_NDEBUG)
 endif()
