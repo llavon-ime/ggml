@@ -10,11 +10,12 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
-#include <format>
 #include <fstream>
+#include <iomanip>
 #include <mutex>
 #include <optional>
-#include <span>
+#include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -48,7 +49,7 @@ class PipelineCache final {
     bool dirty_ = false;
     bool pipeline_created_ = false;
 
-    static Checksum checksum(std::span<const std::uint8_t> data) noexcept {
+    static Checksum checksum(const std::vector<std::uint8_t> & data) noexcept {
         // Detect accidental corruption before passing opaque data to a driver.
         // This is not intended to authenticate user-writable cache files.
         constexpr Checksum offset_basis = 14695981039346656037ull;
@@ -62,12 +63,10 @@ class PipelineCache final {
     }
 
     static std::filesystem::path path_from_utf8(std::string_view value) {
-        std::u8string converted(value.size(), u8'\0');
-        std::memcpy(converted.data(), value.data(), value.size());
-        return std::filesystem::path(converted);
+        return std::filesystem::u8path(value.begin(), value.end());
     }
 
-    bool valid_vulkan_header(std::span<const std::uint8_t> data) const noexcept {
+    bool valid_vulkan_header(const std::vector<std::uint8_t> & data) const noexcept {
         if (data.size() < 32) return false;
         std::array<std::uint32_t, 4> fields{};
         std::memcpy(fields.data(), data.data(), sizeof(fields));
@@ -120,11 +119,16 @@ public:
         try {
             if (!device_ || directory.empty() || pipeline_created_) return false;
 
-            std::string uuid;
-            for (const auto byte : identity_.uuid) uuid += std::format("{:02x}", byte);
-            const auto requested_path = path_from_utf8(directory) / std::format(
-                "ggml-0.11.1-v1-{:x}-{:x}-{:x}-{}-{}.bin",
-                identity_.vendor, identity_.device, identity_.driver, sizeof(void *), uuid);
+            std::ostringstream filename;
+            filename << "ggml-0.11.1-v1-" << std::hex
+                     << identity_.vendor << '-' << identity_.device << '-' << identity_.driver
+                     << '-' << std::dec << sizeof(void *) << '-';
+            for (const auto byte : identity_.uuid) {
+                filename << std::hex << std::setw(2) << std::setfill('0')
+                         << static_cast<unsigned int>(byte);
+            }
+            filename << ".bin";
+            const auto requested_path = path_from_utf8(directory) / filename.str();
             if (cache_ && requested_path == path_) return true;
 
             path_ = requested_path;
@@ -182,17 +186,21 @@ public:
             header.checksum = value;
             std::filesystem::create_directories(path_.parent_path());
 
-            static std::atomic_uint64_t sequence{};
+            static std::atomic<std::uint64_t> sequence{};
+            static const std::uint64_t process_nonce = [] {
+                std::random_device random;
+                return (static_cast<std::uint64_t>(random()) << 32) ^ random();
+            }();
             const auto clock = static_cast<std::uint64_t>(
                 std::chrono::steady_clock::now().time_since_epoch().count());
-            std::filesystem::path temporary;
-            bool written = false;
-            for (unsigned int attempt = 0; attempt < 16 && !written; ++attempt) {
-                temporary = path_;
-                temporary += std::format(".{:x}.{:x}.tmp", clock, sequence.fetch_add(1));
-                std::ofstream file(temporary,
-                    std::ios::binary | std::ios::out | std::ios::noreplace);
-                if (!file) continue;
+            std::ostringstream suffix;
+            suffix << '.' << std::hex << process_nonce << '.' << clock << '.'
+                   << sequence.fetch_add(1) << ".tmp";
+            auto temporary = path_;
+            temporary += suffix.str();
+            {
+                std::ofstream file(temporary, std::ios::binary | std::ios::out);
+                if (!file) throw std::runtime_error("pipeline cache temporary file creation failed");
                 file.write(reinterpret_cast<const char *>(&header), sizeof(header));
                 file.write(reinterpret_cast<const char *>(data.data()),
                            static_cast<std::streamsize>(data.size()));
@@ -202,9 +210,7 @@ public:
                     std::filesystem::remove(temporary, ignored);
                     throw std::runtime_error("pipeline cache write failed");
                 }
-                written = true;
             }
-            if (!written) throw std::runtime_error("pipeline cache temporary file creation failed");
 
             try {
                 std::filesystem::rename(temporary, path_);
